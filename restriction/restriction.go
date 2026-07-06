@@ -168,36 +168,52 @@ func (s *Set) Fingerprint() string {
 	return hex.EncodeToString(sum[:])
 }
 
-// AssertServiceAccountKeepsEdit returns an error when reconciling the set would
-// remove edit access from the service account Mark authenticates as, which
-// would lock Mark out of future updates to the page.
+// AssertServiceAccountRetainsAccess returns an error when reconciling the set
+// would lock the service account Mark authenticates as out of the page.
+//
+// Both the edit and the view layers are checked: in Confluence a user must be
+// able to view a page to edit it (and Mark must be able to fetch the page at
+// all), so an exclusive view restriction that omits the service account is just
+// as locking as an exclusive edit restriction.
 //
 // username is the account Mark authenticates as; it may be empty when a
 // personal access token is used. allowGroupEditAccess relaxes the check when
-// the service account's edit access is only granted through a declared group,
-// whose membership Mark cannot verify in V1.
-func (s *Set) AssertServiceAccountKeepsEdit(username, pageTitle string, allowGroupEditAccess bool) error {
-	editUsers := s.EditUsers()
-	editGroups := s.EditGroups()
+// the service account's access is only granted through a declared group, whose
+// membership Mark cannot verify in V1.
+func (s *Set) AssertServiceAccountRetainsAccess(username, pageTitle string, allowGroupEditAccess bool) error {
+	if err := s.assertOpRetained(OpEdit, username, pageTitle, allowGroupEditAccess); err != nil {
+		return err
+	}
+	if err := s.assertOpRetained(OpView, username, pageTitle, allowGroupEditAccess); err != nil {
+		return err
+	}
+	return nil
+}
 
-	// No edit restrictions at all: the page stays editable by anyone with the
-	// relevant space permissions, so Mark can never be locked out.
-	if len(editUsers) == 0 && len(editGroups) == 0 {
+// assertOpRetained verifies that the service account keeps access for a single
+// operation (view or edit).
+func (s *Set) assertOpRetained(op, username, pageTitle string, allowGroupAccess bool) error {
+	users := s.filter(op, SubjectUser)
+	groups := s.filter(op, SubjectGroup)
+
+	// The operation is not restricted at all: the page stays accessible for
+	// this operation per space permissions, so Mark can never be locked out.
+	if len(users) == 0 && len(groups) == 0 {
 		return nil
 	}
 
-	// The service account is explicitly granted edit access as a user.
+	// The service account is explicitly granted access as a user.
 	if username != "" {
-		for _, u := range editUsers {
+		for _, u := range users {
 			if strings.EqualFold(u, username) {
 				return nil
 			}
 		}
 	}
 
-	// Edit access is (only) granted through a group. Mark cannot verify group
+	// Access is (only) granted through a group. Mark cannot verify group
 	// membership in V1, so this is allowed only when the operator opts in.
-	if len(editGroups) > 0 && allowGroupEditAccess {
+	if len(groups) > 0 && allowGroupAccess {
 		return nil
 	}
 
@@ -206,16 +222,16 @@ func (s *Set) AssertServiceAccountKeepsEdit(username, pageTitle string, allowGro
 		who = fmt.Sprintf("%q", username)
 	}
 
-	hint := "add an explicit `<!-- Restriction: edit:user:<service-account> -->` directive"
+	hint := fmt.Sprintf("add an explicit `<!-- Restriction: %s:user:<service-account> -->` directive", op)
 	if username != "" {
-		hint = fmt.Sprintf("add `<!-- Restriction: edit:user:%s -->`", username)
+		hint = fmt.Sprintf("add `<!-- Restriction: %s:user:%s -->`", op, username)
 	}
-	if len(editGroups) > 0 {
-		hint += " or pass --allow-group-edit-access if the account belongs to a declared edit group"
+	if len(groups) > 0 {
+		hint += " or pass --allow-group-edit-access if the account belongs to a declared " + op + " group"
 	}
 
 	return fmt.Errorf(
-		"restriction reconciliation aborted: service account %s would lose edit access to page %q; %s",
-		who, pageTitle, hint,
+		"restriction reconciliation aborted: service account %s would lose %s access to page %q; %s",
+		who, op, pageTitle, hint,
 	)
 }

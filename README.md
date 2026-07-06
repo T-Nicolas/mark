@@ -242,20 +242,27 @@ Markdown is removed on the next reconcile.
 
 ### Locking Mark out is prevented
 
-Reconciliation is refused when it would remove edit access from the service
-account Mark authenticates as, which would lock Mark out of the page:
+Reconciliation is refused when it would lock the service account Mark
+authenticates as out of the page. Both layers are checked:
+
+* **edit** — Mark needs edit access to update the page;
+* **view** — in Confluence a user must be able to view a page to edit it (and
+  Mark must be able to fetch it at all), so an exclusive `view` restriction that
+  omits the service account is just as locking.
 
 ```
-restriction reconciliation aborted: service account "svc-mark" would lose edit access to page "Architecture réseau"; add `<!-- Restriction: edit:user:svc-mark -->`
+restriction reconciliation aborted: service account "svc-mark" would lose view access to page "Architecture réseau"; add `<!-- Restriction: view:user:svc-mark -->`
 ```
 
-To keep access, either declare the service account explicitly as an edit user:
+To keep access, declare the service account explicitly for every restricted
+layer:
 
 ```markdown
+<!-- Restriction: view:user:svc-mark -->
 <!-- Restriction: edit:user:svc-mark -->
 ```
 
-…or, if it gains edit access through a declared group, pass
+…or, if it gains access through a declared group, pass
 `--allow-group-edit-access` to acknowledge that Mark cannot verify group
 membership itself.
 

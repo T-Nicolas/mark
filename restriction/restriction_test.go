@@ -111,7 +111,7 @@ func TestFingerprintIsOrderIndependentAndDeduplicated(t *testing.T) {
 	assert.NotEqual(t, a.Fingerprint(), empty.Fingerprint())
 }
 
-func TestAssertServiceAccountKeepsEdit(t *testing.T) {
+func TestAssertServiceAccountRetainsAccess(t *testing.T) {
 	mk := func(values ...string) *Set {
 		s := &Set{Reconcile: true}
 		for _, v := range values {
@@ -122,44 +122,62 @@ func TestAssertServiceAccountKeepsEdit(t *testing.T) {
 		return s
 	}
 
-	t.Run("no edit restrictions is always safe", func(t *testing.T) {
-		s := mk("view:group:readers")
-		assert.NoError(t, s.AssertServiceAccountKeepsEdit("svc-mark", "Page", false))
+	t.Run("no restrictions at all is safe", func(t *testing.T) {
+		s := mk()
+		assert.NoError(t, s.AssertServiceAccountRetainsAccess("svc-mark", "Page", false))
 	})
 
-	t.Run("service account explicitly listed as edit user", func(t *testing.T) {
-		s := mk("edit:group:editors", "edit:user:svc-mark")
-		assert.NoError(t, s.AssertServiceAccountKeepsEdit("svc-mark", "Page", false))
+	t.Run("service account explicitly listed for both view and edit", func(t *testing.T) {
+		s := mk("view:group:readers", "view:user:svc-mark", "edit:group:editors", "edit:user:svc-mark")
+		assert.NoError(t, s.AssertServiceAccountRetainsAccess("svc-mark", "Page", false))
 	})
 
 	t.Run("case-insensitive username match", func(t *testing.T) {
 		s := mk("edit:user:SVC-Mark")
-		assert.NoError(t, s.AssertServiceAccountKeepsEdit("svc-mark", "Page", false))
+		assert.NoError(t, s.AssertServiceAccountRetainsAccess("svc-mark", "Page", false))
 	})
 
 	t.Run("edit restricted to others aborts", func(t *testing.T) {
 		s := mk("edit:user:jeremy.voidy")
-		err := s.AssertServiceAccountKeepsEdit("svc-mark", "Architecture réseau", false)
+		err := s.AssertServiceAccountRetainsAccess("svc-mark", "Architecture réseau", false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "reconciliation aborted")
+		assert.Contains(t, err.Error(), "edit access")
 		assert.Contains(t, err.Error(), "Architecture réseau")
 	})
 
-	t.Run("group-only edit aborts by default", func(t *testing.T) {
-		s := mk("edit:group:confluence-doc-editors")
-		err := s.AssertServiceAccountKeepsEdit("svc-mark", "Page", false)
+	// The key case this guard was extended for: an exclusive view restriction
+	// that omits the service account would block Mark from reading the page,
+	// even though it holds edit access.
+	t.Run("view restricted to others aborts even with edit access", func(t *testing.T) {
+		s := mk("view:group:cyber-readers", "edit:user:svc-mark")
+		err := s.AssertServiceAccountRetainsAccess("svc-mark", "Page", false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "view access")
+	})
+
+	t.Run("view group-only aborts by default", func(t *testing.T) {
+		s := mk("view:group:confluence-doc-readers", "edit:user:svc-mark")
+		err := s.AssertServiceAccountRetainsAccess("svc-mark", "Page", false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "--allow-group-edit-access")
 	})
 
-	t.Run("group-only edit allowed with opt-in", func(t *testing.T) {
-		s := mk("edit:group:confluence-doc-editors")
-		assert.NoError(t, s.AssertServiceAccountKeepsEdit("svc-mark", "Page", true))
+	t.Run("group-only view and edit allowed with opt-in", func(t *testing.T) {
+		s := mk("view:group:confluence-doc-readers", "edit:group:confluence-doc-editors")
+		assert.NoError(t, s.AssertServiceAccountRetainsAccess("svc-mark", "Page", true))
+	})
+
+	t.Run("explicit view user but group-only edit still aborts without opt-in", func(t *testing.T) {
+		s := mk("view:user:svc-mark", "edit:group:editors")
+		err := s.AssertServiceAccountRetainsAccess("svc-mark", "Page", false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "edit access")
 	})
 
 	t.Run("token auth without explicit user aborts", func(t *testing.T) {
 		s := mk("edit:user:jeremy.voidy")
-		err := s.AssertServiceAccountKeepsEdit("", "Page", false)
+		err := s.AssertServiceAccountRetainsAccess("", "Page", false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "token auth")
 	})

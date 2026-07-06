@@ -370,7 +370,7 @@ func ProcessFile(file string, api *confluence.API, config Config) (*confluence.P
 			)
 		}
 
-		if err := restrictions.AssertServiceAccountKeepsEdit(
+		if err := restrictions.AssertServiceAccountRetainsAccess(
 			config.Username, target.Title, config.AllowGroupEditAccess,
 		); err != nil {
 			return nil, err
