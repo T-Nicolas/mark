@@ -50,8 +50,14 @@ var Flags = []cli.Flag{
 	&cli.BoolFlag{
 		Name:    "allow-group-edit-access",
 		Value:   false,
-		Usage:   "when reconciling page restrictions (<!-- Restrictions: reconcile -->), allow the service account's edit access to be granted only through a declared edit group instead of an explicit edit:user rule. Confluence Server/Data Center only.",
+		Usage:   "when reconciling page restrictions (<!-- Restrictions: reconcile -->), allow the service account's access to be granted only through a declared group instead of an explicit user rule. Confluence Server/Data Center only.",
 		Sources: cli.NewValueSourceChain(cli.EnvVar("MARK_ALLOW_GROUP_EDIT_ACCESS"), altsrctoml.TOML("allow-group-edit-access", altsrc.NewStringPtrSourcer(&filename))),
+	},
+	&cli.StringFlag{
+		Name:    "service-account-name",
+		Value:   "",
+		Usage:   "name of the Confluence account Mark authenticates as, used by the page-restriction lockout guard when authenticating with a personal access token (where the username is not otherwise known). Defaults to --username.",
+		Sources: cli.NewValueSourceChain(cli.EnvVar("MARK_SERVICE_ACCOUNT_NAME"), altsrctoml.TOML("service-account-name", altsrc.NewStringPtrSourcer(&filename))),
 	},
 	&cli.BoolFlag{
 		Name:    "drop-h1",

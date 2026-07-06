@@ -115,6 +115,7 @@ func RunMark(ctx context.Context, cmd *cli.Command) error {
 		VersionMessage:       cmd.String("version-message"),
 		EditLock:             cmd.Bool("edit-lock"),
 		AllowGroupEditAccess: cmd.Bool("allow-group-edit-access"),
+		ServiceAccountName:   cmd.String("service-account-name"),
 		ChangesOnly:          cmd.Bool("changes-only"),
 		PreserveComments:     cmd.Bool("preserve-comments"),
 

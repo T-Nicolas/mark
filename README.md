@@ -266,6 +266,13 @@ layer:
 `--allow-group-edit-access` to acknowledge that Mark cannot verify group
 membership itself.
 
+> [!NOTE]
+> When authenticating with a **personal access token**, the username is not
+> available to Mark, so the guard cannot match a `view:user`/`edit:user` rule
+> against the service account. Declare the account name explicitly with
+> `--service-account-name svc-mark` (or `MARK_SERVICE_ACCOUNT_NAME`) so the
+> guard can protect it.
+
 ### Interactions with other options
 
 * `--edit-lock` cannot be combined with `<!-- Restrictions: reconcile -->` — the
@@ -276,6 +283,9 @@ membership itself.
   (for example swapping one group for another) triggers a sync even when the
   rendered HTML is unchanged, because Mark tracks a separate fingerprint of the
   normalized restrictions.
+* `--dry-run` validates the declared restrictions without applying them: it
+  surfaces unknown users/groups, lockout errors and Cloud-unsupported errors
+  before a real run.
 
 ### Creating sensitive pages safely
 
@@ -981,7 +991,8 @@ GLOBAL OPTIONS:
    --compile-only                           show resulting HTML and don't update Confluence page content. [$MARK_COMPILE_ONLY]
    --dry-run                                resolve page and ancestry, show resulting HTML and exit. [$MARK_DRY_RUN]
    --edit-lock, -k                          lock page editing to current user only to prevent accidental manual edits over Confluence Web UI. [$MARK_EDIT_LOCK]
-   --allow-group-edit-access                when reconciling page restrictions, allow the service account's edit access to be granted only through a declared edit group. Confluence Server/Data Center only. [$MARK_ALLOW_GROUP_EDIT_ACCESS]
+   --allow-group-edit-access                when reconciling page restrictions, allow the service account's access to be granted only through a declared group. Confluence Server/Data Center only. [$MARK_ALLOW_GROUP_EDIT_ACCESS]
+   --service-account-name value             name of the account Mark authenticates as, used by the restriction lockout guard when authenticating with a personal access token. Defaults to --username. [$MARK_SERVICE_ACCOUNT_NAME]
    --drop-h1                                don't include the first H1 heading in Confluence output. [$MARK_DROP_H1]
    --strip-linebreaks, -L                   remove linebreaks inside of tags, to accommodate non-standard Confluence behavior [$MARK_STRIP_LINEBREAKS]
    --title-from-h1                          extract page title from a leading H1 heading. If no H1 heading on a page exists, then title must be set in the page metadata. Mutually exclusive with --title-from-filename. [$MARK_TITLE_FROM_H1]

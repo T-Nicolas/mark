@@ -64,6 +64,7 @@ type Config struct {
 	VersionMessage       string
 	EditLock             bool
 	AllowGroupEditAccess bool
+	ServiceAccountName   string
 	ChangesOnly          bool
 	PreserveComments     bool
 
@@ -197,6 +198,14 @@ func ProcessFile(file string, api *confluence.API, config Config) (*confluence.P
 	}
 	reconcileActive := restrictions != nil && restrictions.Reconcile
 
+	// The service account whose access the lockout guard protects. With basic
+	// auth this is the username; with personal-access-token auth the username is
+	// unknown, so --service-account-name lets the operator declare it explicitly.
+	serviceAccount := config.Username
+	if config.ServiceAccountName != "" {
+		serviceAccount = config.ServiceAccountName
+	}
+
 	if reconcileActive && config.EditLock {
 		return nil, fmt.Errorf(
 			"--edit-lock cannot be used with <!-- Restrictions: reconcile -->",
@@ -274,6 +283,16 @@ func ProcessFile(file string, api *confluence.API, config Config) (*confluence.P
 		} else if config.PageID != "" {
 			if _, err := api.GetPageByID(config.PageID); err != nil {
 				return nil, fmt.Errorf("unable to resolve page by ID: %w", err)
+			}
+		}
+
+		// Validate the declared restrictions without applying them, so a dry
+		// run surfaces cloud/lockout/unknown-principal errors before a real run.
+		if reconcileActive {
+			if err := validateRestrictions(
+				api, restrictions, serviceAccount, meta.Title, config.AllowGroupEditAccess,
+			); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -363,20 +382,9 @@ func ProcessFile(file string, api *confluence.API, config Config) (*confluence.P
 	// rendered HTML is unchanged.
 	var restrictionsChanged bool
 	if reconcileActive {
-		if api.IsCloud() {
-			return nil, fmt.Errorf(
-				"<!-- Restrictions: reconcile --> is only supported on " +
-					"Confluence Server / Data Center, not Confluence Cloud",
-			)
-		}
-
-		if err := restrictions.AssertServiceAccountRetainsAccess(
-			config.Username, target.Title, config.AllowGroupEditAccess,
+		if err := validateRestrictions(
+			api, restrictions, serviceAccount, target.Title, config.AllowGroupEditAccess,
 		); err != nil {
-			return nil, err
-		}
-
-		if err := validateRestrictionPrincipals(api, restrictions); err != nil {
 			return nil, err
 		}
 
@@ -667,6 +675,38 @@ func extractRestrictionHash(versionMessage string) string {
 		return matches[1]
 	}
 	return ""
+}
+
+// validateRestrictions performs all pre-apply checks for a reconcile: it
+// rejects Confluence Cloud, verifies that every referenced principal exists
+// (so a typo is reported as an unknown user/group rather than a misleading
+// lockout error), and finally asserts that the service account keeps view and
+// edit access. It does not modify anything, so it is safe to call during a dry
+// run as well as before the real reconcile.
+func validateRestrictions(
+	api *confluence.API,
+	set *restriction.Set,
+	serviceAccount, pageTitle string,
+	allowGroupEditAccess bool,
+) error {
+	if api.IsCloud() {
+		return fmt.Errorf(
+			"<!-- Restrictions: reconcile --> is only supported on " +
+				"Confluence Server / Data Center, not Confluence Cloud",
+		)
+	}
+
+	if err := validateRestrictionPrincipals(api, set); err != nil {
+		return err
+	}
+
+	if err := set.AssertServiceAccountRetainsAccess(
+		serviceAccount, pageTitle, allowGroupEditAccess,
+	); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // validateRestrictionPrincipals verifies that every user and group referenced
