@@ -216,7 +216,7 @@ directly from the Markdown metadata. This is opt-in per page via the
 
 Each rule follows the format:
 
-```
+```text
 Restriction: <view|edit>:<group|user>:<name>
 ```
 
@@ -250,7 +250,7 @@ authenticates as out of the page. Both layers are checked:
   Mark must be able to fetch it at all), so an exclusive `view` restriction that
   omits the service account is just as locking.
 
-```
+```text
 restriction reconciliation aborted: service account "svc-mark" would lose view access to page "Architecture réseau"; add `<!-- Restriction: view:user:svc-mark -->`
 ```
 
