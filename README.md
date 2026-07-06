@@ -33,6 +33,9 @@ File in the extended format should follow the specification:
 <!-- Label: <label 1> -->
 <!-- Label: <label 2> -->
 <!-- Image-Align: <left|center|right> -->
+<!-- Restrictions: reconcile -->
+<!-- Restriction: view:group:<group name> -->
+<!-- Restriction: edit:user:<user name> -->
 
 <page contents>
 ```
@@ -193,6 +196,96 @@ The key's value must be a string which defines the template's content.
   content
   </tblbox>
 ```
+
+## Page Restrictions
+
+> [!NOTE]
+> Declarative page restrictions are a **Confluence Server / Data Center** feature only. They are not supported on Confluence Cloud.
+
+Mark can manage a page's local **view** and **edit** restrictions declaratively,
+directly from the Markdown metadata. This is opt-in per page via the
+`Restrictions: reconcile` marker:
+
+```markdown
+<!-- Restrictions: reconcile -->
+<!-- Restriction: view:group:confluence-doc-readers -->
+<!-- Restriction: view:user:jeremy.voidy -->
+<!-- Restriction: edit:group:confluence-doc-editors -->
+<!-- Restriction: edit:user:svc-mark -->
+```
+
+Each rule follows the format:
+
+```
+Restriction: <view|edit>:<group|user>:<name>
+```
+
+The directives are repeatable and duplicates are ignored. `view` and `edit`
+match the wording used by the Confluence Data Center API and UI.
+
+### Reconcile behaviour
+
+The `<!-- Restrictions: reconcile -->` marker declares that **Mark is the single
+source of truth** for the page's local view and edit restrictions. On each sync
+Mark makes the page's local restrictions match the directives exactly:
+
+| Case | Behaviour |
+| --- | --- |
+| No `Restrictions: reconcile` | Mark does not touch any permission |
+| `reconcile` + rules | Mark replaces the existing local restrictions with the declared ones |
+| `reconcile` with no rules | Mark removes the local `view` and `edit` restrictions from the page |
+| A rule removed from Git | The corresponding access is revoked on the next sync |
+| A rule added | The access is granted |
+
+Any group or user added manually in Confluence that is not declared in the
+Markdown is removed on the next reconcile.
+
+### Locking Mark out is prevented
+
+Reconciliation is refused when it would remove edit access from the service
+account Mark authenticates as, which would lock Mark out of the page:
+
+```
+restriction reconciliation aborted: service account "svc-mark" would lose edit access to page "Architecture réseau"; add `<!-- Restriction: edit:user:svc-mark -->`
+```
+
+To keep access, either declare the service account explicitly as an edit user:
+
+```markdown
+<!-- Restriction: edit:user:svc-mark -->
+```
+
+…or, if it gains edit access through a declared group, pass
+`--allow-group-edit-access` to acknowledge that Mark cannot verify group
+membership itself.
+
+### Interactions with other options
+
+* `--edit-lock` cannot be combined with `<!-- Restrictions: reconcile -->` — the
+  declarative header becomes the single source of truth for the page's
+  permissions, and the two mechanisms could otherwise apply contradicting
+  policies.
+* `--changes-only` accounts for restriction changes: a permission-only change
+  (for example swapping one group for another) triggers a sync even when the
+  rendered HTML is unchanged, because Mark tracks a separate fingerprint of the
+  normalized restrictions.
+
+### Creating sensitive pages safely
+
+Mark must create a page before it can apply local restrictions to it, so a
+brand-new confidential page created directly in a public space or under a public
+parent has a short exposure window. Mark applies restrictions immediately after
+creating the page, before uploading attachments, to minimize this window. Even
+so, **sensitive pages should be created under an already-restricted parent or in
+an already-restricted space.**
+
+### Out of scope (V1)
+
+Space-level permissions, group/user management, LDAP/AD integration, forced
+propagation to descendants, inherited permissions from parent pages, Confluence
+Cloud, and computing "effective" permissions after inheritance are intentionally
+out of scope. Mark only drives the `view` and `edit` restrictions set directly on
+the synced page.
 
 ## Automatic Page Title
 
@@ -881,6 +974,7 @@ GLOBAL OPTIONS:
    --compile-only                           show resulting HTML and don't update Confluence page content. [$MARK_COMPILE_ONLY]
    --dry-run                                resolve page and ancestry, show resulting HTML and exit. [$MARK_DRY_RUN]
    --edit-lock, -k                          lock page editing to current user only to prevent accidental manual edits over Confluence Web UI. [$MARK_EDIT_LOCK]
+   --allow-group-edit-access                when reconciling page restrictions, allow the service account's edit access to be granted only through a declared edit group. Confluence Server/Data Center only. [$MARK_ALLOW_GROUP_EDIT_ACCESS]
    --drop-h1                                don't include the first H1 heading in Confluence output. [$MARK_DROP_H1]
    --strip-linebreaks, -L                   remove linebreaks inside of tags, to accommodate non-standard Confluence behavior [$MARK_STRIP_LINEBREAKS]
    --title-from-h1                          extract page title from a leading H1 heading. If no H1 heading on a page exists, then title must be set in the page metadata. Mutually exclusive with --title-from-filename. [$MARK_TITLE_FROM_H1]

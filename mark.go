@@ -24,6 +24,7 @@ import (
 	markmd "github.com/kovetskiy/mark/v16/markdown"
 	"github.com/kovetskiy/mark/v16/metadata"
 	"github.com/kovetskiy/mark/v16/page"
+	"github.com/kovetskiy/mark/v16/restriction"
 	"github.com/kovetskiy/mark/v16/stdlib"
 	"github.com/kovetskiy/mark/v16/types"
 	"github.com/kovetskiy/mark/v16/vfs"
@@ -59,11 +60,12 @@ type Config struct {
 	ContentAppearance        string
 
 	// Page updates
-	MinorEdit        bool
-	VersionMessage   string
-	EditLock         bool
-	ChangesOnly      bool
-	PreserveComments bool
+	MinorEdit            bool
+	VersionMessage       string
+	EditLock             bool
+	AllowGroupEditAccess bool
+	ChangesOnly          bool
+	PreserveComments     bool
 
 	// Rendering
 	DropH1          bool
@@ -187,6 +189,24 @@ func ProcessFile(file string, api *confluence.API, config Config) (*confluence.P
 					"or the --title-from-h1 / --title-from-filename flags",
 			)
 		}
+	}
+
+	var restrictions *restriction.Set
+	if meta != nil {
+		restrictions = meta.Restrictions
+	}
+	reconcileActive := restrictions != nil && restrictions.Reconcile
+
+	if reconcileActive && config.EditLock {
+		return nil, fmt.Errorf(
+			"--edit-lock cannot be used with <!-- Restrictions: reconcile -->",
+		)
+	}
+	if restrictions != nil && !restrictions.Reconcile && restrictions.HasRules() {
+		log.Warn().Msg(
+			"restriction directives are present but <!-- Restrictions: reconcile --> " +
+				"is not set; page permissions will be left untouched",
+		)
 	}
 
 	std, err := stdlib.New(api)
@@ -335,6 +355,52 @@ func ProcessFile(file string, api *confluence.API, config Config) (*confluence.P
 		}
 	}
 
+	// Reconcile page-level restrictions before uploading attachments and
+	// content. On a freshly created page this narrows the exposure window: the
+	// page becomes locked down as early as possible. restrictionsChanged is
+	// reused below so that --changes-only bumps the page version whenever the
+	// declared restrictions differ from the previously synced ones, even if the
+	// rendered HTML is unchanged.
+	var restrictionsChanged bool
+	if reconcileActive {
+		if api.IsCloud() {
+			return nil, fmt.Errorf(
+				"<!-- Restrictions: reconcile --> is only supported on " +
+					"Confluence Server / Data Center, not Confluence Cloud",
+			)
+		}
+
+		if err := restrictions.AssertServiceAccountKeepsEdit(
+			config.Username, target.Title, config.AllowGroupEditAccess,
+		); err != nil {
+			return nil, err
+		}
+
+		if err := validateRestrictionPrincipals(api, restrictions); err != nil {
+			return nil, err
+		}
+
+		restrictionsChanged = true
+		if config.ChangesOnly {
+			if prev := extractRestrictionHash(target.Version.Message); prev != "" {
+				restrictionsChanged = prev != restrictions.Fingerprint()
+			}
+		}
+
+		if restrictionsChanged || !config.ChangesOnly {
+			log.Info().Msgf("reconciling page restrictions on %q", target.Title)
+			if err := api.ReconcilePageRestrictions(
+				target,
+				restrictions.ViewUsers(), restrictions.ViewGroups(),
+				restrictions.EditUsers(), restrictions.EditGroups(),
+			); err != nil {
+				return nil, fmt.Errorf("unable to reconcile page restrictions: %w", err)
+			}
+		} else {
+			log.Info().Msgf("page restrictions on %q are already up to date", target.Title)
+		}
+	}
+
 	// Collect attachments declared via <!-- Attachment: --> directives.
 	var declaredAttachments []string
 	if meta != nil {
@@ -424,18 +490,32 @@ func ProcessFile(file string, api *confluence.API, config Config) (*confluence.P
 		contentHash := sha1Hash(html)
 		log.Debug().Msgf("content hash: %s", contentHash)
 
-		re := regexp.MustCompile(`\[v([a-f0-9]{40})]$`)
+		contentUnchanged := false
+		re := regexp.MustCompile(`\[v([a-f0-9]{40})]`)
 		if matches := re.FindStringSubmatch(target.Version.Message); len(matches) > 1 {
 			log.Debug().Msgf("previous content hash: %s", matches[1])
-			if matches[1] == contentHash {
-				log.Info().Msgf("page %q is already up to date", target.Title)
-				shouldUpdatePage = false
-			}
+			contentUnchanged = matches[1] == contentHash
+		}
+
+		// The page must be re-published when the content changed or when the
+		// declared restrictions changed, so that the new restriction
+		// fingerprint is persisted in the version message for the next
+		// --changes-only run.
+		shouldUpdatePage = !contentUnchanged || restrictionsChanged
+		if !shouldUpdatePage {
+			log.Info().Msgf("page %q is already up to date", target.Title)
 		}
 
 		finalVersionMessage = fmt.Sprintf("%s [v%s]", config.VersionMessage, contentHash)
 	} else {
 		finalVersionMessage = config.VersionMessage
+	}
+
+	// Persist a fingerprint of the reconciled restrictions in the version
+	// message so that --changes-only can detect permission-only changes on the
+	// next run.
+	if reconcileActive {
+		finalVersionMessage = fmt.Sprintf("%s [r%s]", finalVersionMessage, restrictions.Fingerprint())
 	}
 
 	// Only fetch the old body and inline comments when we know the page will
@@ -574,6 +654,50 @@ func sha1Hash(input string) string {
 	h := sha1.New()
 	h.Write([]byte(input))
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// reRestrictionHash matches the restriction fingerprint token embedded in a
+// page version message by a previous reconcile run.
+var reRestrictionHash = regexp.MustCompile(`\[r([a-f0-9]{64})]`)
+
+// extractRestrictionHash returns the restriction fingerprint previously stored
+// in a page version message, or "" when none is present.
+func extractRestrictionHash(versionMessage string) string {
+	if matches := reRestrictionHash.FindStringSubmatch(versionMessage); len(matches) > 1 {
+		return matches[1]
+	}
+	return ""
+}
+
+// validateRestrictionPrincipals verifies that every user and group referenced
+// by the declared restrictions exists in Confluence, failing fast on typos.
+// Each distinct principal is checked at most once.
+func validateRestrictionPrincipals(api *confluence.API, set *restriction.Set) error {
+	seenUsers := make(map[string]bool)
+	seenGroups := make(map[string]bool)
+
+	for _, rule := range set.Rules {
+		switch rule.Subject {
+		case restriction.SubjectUser:
+			if seenUsers[rule.Name] {
+				continue
+			}
+			seenUsers[rule.Name] = true
+			if err := api.CheckUserExists(rule.Name); err != nil {
+				return err
+			}
+		case restriction.SubjectGroup:
+			if seenGroups[rule.Name] {
+				continue
+			}
+			seenGroups[rule.Name] = true
+			if err := api.CheckGroupExists(rule.Name); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 // htmlEscapeText escapes only the characters that Confluence storage HTML

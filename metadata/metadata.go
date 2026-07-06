@@ -9,25 +9,28 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/kovetskiy/mark/v16/restriction"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
 
 const (
-	HeaderParent      = `Parent`
-	HeaderFolder      = `Folder`
-	HeaderSpace       = `Space`
-	HeaderType        = `Type`
-	HeaderTitle       = `Title`
-	HeaderLayout      = `Layout`
-	HeaderEmoji       = `Emoji`
-	HeaderAttachment  = `Attachment`
-	HeaderLabel       = `Label`
-	HeaderInclude     = `Include`
-	HeaderSidebar     = `Sidebar`
-	ContentAppearance = `Content-Appearance`
-	HeaderImageAlign  = `Image-Align`
+	HeaderParent       = `Parent`
+	HeaderFolder       = `Folder`
+	HeaderSpace        = `Space`
+	HeaderType         = `Type`
+	HeaderTitle        = `Title`
+	HeaderLayout       = `Layout`
+	HeaderEmoji        = `Emoji`
+	HeaderAttachment   = `Attachment`
+	HeaderLabel        = `Label`
+	HeaderInclude      = `Include`
+	HeaderSidebar      = `Sidebar`
+	ContentAppearance  = `Content-Appearance`
+	HeaderImageAlign   = `Image-Align`
+	HeaderRestrictions = `Restrictions`
+	HeaderRestriction  = `Restriction`
 )
 
 type Meta struct {
@@ -43,6 +46,7 @@ type Meta struct {
 	Labels            []string
 	ContentAppearance string
 	ImageAlign        string
+	Restrictions      *restriction.Set
 }
 
 const (
@@ -81,7 +85,7 @@ func ExtractMeta(data []byte, spaceFromCli string, titleFromH1 bool, titleFromFi
 
 		if meta == nil {
 			meta = &Meta{}
-			meta.Type = "page"                                  // Default if not specified
+			meta.Type = "page" // Default if not specified
 		}
 
 		header := cases.Title(language.English).String(matches[1])
@@ -139,6 +143,26 @@ func ExtractMeta(data []byte, spaceFromCli string, titleFromH1 bool, titleFromFi
 
 		case HeaderImageAlign:
 			meta.ImageAlign = strings.ToLower(strings.TrimSpace(value))
+
+		case HeaderRestrictions:
+			reconcile, err := restriction.ParseMode(value)
+			if err != nil {
+				return nil, nil, err
+			}
+			if meta.Restrictions == nil {
+				meta.Restrictions = &restriction.Set{}
+			}
+			meta.Restrictions.Reconcile = meta.Restrictions.Reconcile || reconcile
+
+		case HeaderRestriction:
+			rule, err := restriction.ParseRule(value)
+			if err != nil {
+				return nil, nil, err
+			}
+			if meta.Restrictions == nil {
+				meta.Restrictions = &restriction.Set{}
+			}
+			meta.Restrictions.Add(rule)
 
 		default:
 			log.Error().

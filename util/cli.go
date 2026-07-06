@@ -111,11 +111,12 @@ func RunMark(ctx context.Context, cmd *cli.Command) error {
 		TitleAppendGeneratedHash: cmd.Bool("title-append-generated-hash"),
 		ContentAppearance:        cmd.String("content-appearance"),
 
-		MinorEdit:        cmd.Bool("minor-edit"),
-		VersionMessage:   cmd.String("version-message"),
-		EditLock:         cmd.Bool("edit-lock"),
-		ChangesOnly:      cmd.Bool("changes-only"),
-		PreserveComments: cmd.Bool("preserve-comments"),
+		MinorEdit:            cmd.Bool("minor-edit"),
+		VersionMessage:       cmd.String("version-message"),
+		EditLock:             cmd.Bool("edit-lock"),
+		AllowGroupEditAccess: cmd.Bool("allow-group-edit-access"),
+		ChangesOnly:          cmd.Bool("changes-only"),
+		PreserveComments:     cmd.Bool("preserve-comments"),
 
 		DropH1:          cmd.Bool("drop-h1"),
 		StripLinebreaks: cmd.Bool("strip-linebreaks"),

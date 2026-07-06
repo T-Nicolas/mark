@@ -48,6 +48,12 @@ var Flags = []cli.Flag{
 		Sources: cli.NewValueSourceChain(cli.EnvVar("MARK_EDIT_LOCK"), altsrctoml.TOML("edit-lock", altsrc.NewStringPtrSourcer(&filename))),
 	},
 	&cli.BoolFlag{
+		Name:    "allow-group-edit-access",
+		Value:   false,
+		Usage:   "when reconciling page restrictions (<!-- Restrictions: reconcile -->), allow the service account's edit access to be granted only through a declared edit group instead of an explicit edit:user rule. Confluence Server/Data Center only.",
+		Sources: cli.NewValueSourceChain(cli.EnvVar("MARK_ALLOW_GROUP_EDIT_ACCESS"), altsrctoml.TOML("allow-group-edit-access", altsrc.NewStringPtrSourcer(&filename))),
+	},
+	&cli.BoolFlag{
 		Name:    "drop-h1",
 		Value:   false,
 		Usage:   "don't include the first H1 heading in Confluence output.",

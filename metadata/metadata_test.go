@@ -234,3 +234,69 @@ func TestExtractMeta_FolderHeadersWithCliParents(t *testing.T) {
 	assert.Equal(t, cliParents, meta.Parents)
 	assert.Equal(t, []string{"API"}, meta.Folders)
 }
+
+func TestExtractMeta_Restrictions(t *testing.T) {
+	t.Run("reconcile with mixed groups and users, view and edit", func(t *testing.T) {
+		markdown := `<!-- Space: DOC -->
+<!-- Title: Architecture -->
+<!-- Restrictions: reconcile -->
+<!-- Restriction: view:group:confluence-doc-readers -->
+<!-- Restriction: view:group:confluence-doc-editors -->
+<!-- Restriction: view:user:jeremy.voidy -->
+<!-- Restriction: edit:group:confluence-doc-editors -->
+<!-- Restriction: edit:user:svc-mark -->
+<!-- Restriction: edit:user:svc-mark -->
+
+# Content`
+
+		meta, _, err := ExtractMeta([]byte(markdown), "", false, false, "", nil, false, "")
+		assert.NoError(t, err)
+		if assert.NotNil(t, meta.Restrictions) {
+			assert.True(t, meta.Restrictions.Reconcile)
+			// The duplicate edit:user:svc-mark directive is ignored.
+			assert.Equal(t, []string{"confluence-doc-readers", "confluence-doc-editors"}, meta.Restrictions.ViewGroups())
+			assert.Equal(t, []string{"jeremy.voidy"}, meta.Restrictions.ViewUsers())
+			assert.Equal(t, []string{"confluence-doc-editors"}, meta.Restrictions.EditGroups())
+			assert.Equal(t, []string{"svc-mark"}, meta.Restrictions.EditUsers())
+		}
+	})
+
+	t.Run("reconcile without rules keeps an empty managed set", func(t *testing.T) {
+		markdown := "<!-- Space: DOC -->\n<!-- Title: Empty -->\n<!-- Restrictions: reconcile -->\n\nbody\n"
+		meta, _, err := ExtractMeta([]byte(markdown), "", false, false, "", nil, false, "")
+		assert.NoError(t, err)
+		if assert.NotNil(t, meta.Restrictions) {
+			assert.True(t, meta.Restrictions.Reconcile)
+			assert.False(t, meta.Restrictions.HasRules())
+		}
+	})
+
+	t.Run("rules without reconcile marker are parsed but not managed", func(t *testing.T) {
+		markdown := "<!-- Space: DOC -->\n<!-- Title: Passive -->\n<!-- Restriction: view:group:readers -->\n\nbody\n"
+		meta, _, err := ExtractMeta([]byte(markdown), "", false, false, "", nil, false, "")
+		assert.NoError(t, err)
+		if assert.NotNil(t, meta.Restrictions) {
+			assert.False(t, meta.Restrictions.Reconcile)
+			assert.True(t, meta.Restrictions.HasRules())
+		}
+	})
+
+	t.Run("no restriction directives leaves Restrictions nil", func(t *testing.T) {
+		markdown := "<!-- Space: DOC -->\n<!-- Title: Plain -->\n\nbody\n"
+		meta, _, err := ExtractMeta([]byte(markdown), "", false, false, "", nil, false, "")
+		assert.NoError(t, err)
+		assert.Nil(t, meta.Restrictions)
+	})
+
+	t.Run("invalid restriction syntax is a hard error", func(t *testing.T) {
+		markdown := "<!-- Space: DOC -->\n<!-- Title: Bad -->\n<!-- Restriction: read:group:x -->\n\nbody\n"
+		_, _, err := ExtractMeta([]byte(markdown), "", false, false, "", nil, false, "")
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid Restrictions mode is a hard error", func(t *testing.T) {
+		markdown := "<!-- Space: DOC -->\n<!-- Title: Bad -->\n<!-- Restrictions: purge -->\n\nbody\n"
+		_, _, err := ExtractMeta([]byte(markdown), "", false, false, "", nil, false, "")
+		assert.Error(t, err)
+	})
+}

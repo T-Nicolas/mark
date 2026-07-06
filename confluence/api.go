@@ -958,6 +958,119 @@ func (api *API) RestrictPageUpdates(
 	return err
 }
 
+// ReconcilePageRestrictions replaces the page's local view and edit
+// restrictions so that they match exactly the supplied users and groups.
+//
+// It uses the JSON-RPC setContentPermissions endpoint, whose semantics are a
+// full replacement of the permission set for the given type; passing empty
+// slices therefore removes the corresponding restriction entirely. Both the
+// View and Edit permission types are always written so that removing a rule
+// from the Markdown reliably clears it in Confluence.
+//
+// This is a Confluence Server / Data Center feature only; the JSON-RPC API is
+// not available on Confluence Cloud.
+func (api *API) ReconcilePageRestrictions(
+	page *PageInfo,
+	viewUsers, viewGroups, editUsers, editGroups []string,
+) error {
+	if api.IsCloud() {
+		return errors.New(
+			"page-level restriction reconciliation is only supported on " +
+				"Confluence Server / Data Center",
+		)
+	}
+
+	if err := api.setContentPermissions(page.ID, "View", viewUsers, viewGroups); err != nil {
+		return fmt.Errorf("unable to set view restrictions: %w", err)
+	}
+	if err := api.setContentPermissions(page.ID, "Edit", editUsers, editGroups); err != nil {
+		return fmt.Errorf("unable to set edit restrictions: %w", err)
+	}
+
+	return nil
+}
+
+func (api *API) setContentPermissions(
+	pageID string,
+	permissionType string,
+	users, groups []string,
+) error {
+	permissions := make([]map[string]any, 0, len(users)+len(groups))
+	for _, user := range users {
+		permissions = append(permissions, map[string]any{"userName": user})
+	}
+	for _, group := range groups {
+		permissions = append(permissions, map[string]any{"groupName": group})
+	}
+
+	var result any
+	request, err := api.json.Res(
+		"setContentPermissions", &result,
+	).Post([]any{
+		pageID,
+		permissionType,
+		permissions,
+	})
+	if err != nil {
+		return err
+	}
+
+	if request.Raw.StatusCode != http.StatusOK {
+		return newErrorStatusNotOK(request)
+	}
+
+	if success, ok := result.(bool); !ok || !success {
+		return fmt.Errorf(
+			"'true' response expected, but '%v' encountered",
+			result,
+		)
+	}
+
+	return nil
+}
+
+// CheckUserExists verifies that a Confluence user with the given username
+// exists, using an exact username lookup. A 404 is reported as a descriptive
+// "unknown user" error so that a typo in a restriction directive fails fast
+// rather than silently applying a broken restriction.
+func (api *API) CheckUserExists(username string) error {
+	var result any
+	request, err := api.rest.Res("user", &result).Get(map[string]string{
+		"username": username,
+	})
+	if err != nil {
+		return err
+	}
+
+	if request.Raw.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("restriction references unknown Confluence user %q", username)
+	}
+	if request.Raw.StatusCode != http.StatusOK {
+		return newErrorStatusNotOK(request)
+	}
+
+	return nil
+}
+
+// CheckGroupExists verifies that a Confluence group with the given name exists.
+// A 404 is reported as a descriptive "unknown group" error.
+func (api *API) CheckGroupExists(group string) error {
+	var result any
+	request, err := api.rest.Res("group").Res(group, &result).Get()
+	if err != nil {
+		return err
+	}
+
+	if request.Raw.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("restriction references unknown Confluence group %q", group)
+	}
+	if request.Raw.StatusCode != http.StatusOK {
+		return newErrorStatusNotOK(request)
+	}
+
+	return nil
+}
+
 // Folder API methods (Phase 2 implementation)
 func (api *API) CreateFolder(spaceID, title string, parentID *string, parentType string) (*FolderInfo, error) {
 	actualSpaceID := spaceID
