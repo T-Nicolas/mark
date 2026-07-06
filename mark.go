@@ -669,11 +669,6 @@ func sha1Hash(input string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// maxVersionMessageLen bounds the page version message so that the
-// change-detection markers (the trailing [v...] and [r...] tokens) survive
-// Confluence's version-message length limit. Because the tokens are what
-// --changes-only relies on, buildVersionMessage keeps them intact and truncates
-// the user-supplied message instead.
 const maxVersionMessageLen = 255
 
 func buildVersionMessage(userMessage, tokens string) string {
