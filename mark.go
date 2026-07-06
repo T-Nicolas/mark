@@ -491,8 +491,13 @@ func ProcessFile(file string, api *confluence.API, config Config) (*confluence.P
 		html = buffer.String()
 	}
 
-	var finalVersionMessage string
 	shouldUpdatePage := true
+
+	// versionTokens holds the machine-readable change-detection markers appended
+	// to the version message. They must survive Confluence's message length
+	// limit, so buildVersionMessage keeps them intact and truncates the
+	// user-supplied message instead.
+	var versionTokens string
 
 	if config.ChangesOnly {
 		contentHash := sha1Hash(html)
@@ -514,17 +519,17 @@ func ProcessFile(file string, api *confluence.API, config Config) (*confluence.P
 			log.Info().Msgf("page %q is already up to date", target.Title)
 		}
 
-		finalVersionMessage = fmt.Sprintf("%s [v%s]", config.VersionMessage, contentHash)
-	} else {
-		finalVersionMessage = config.VersionMessage
+		versionTokens += fmt.Sprintf(" [v%s]", contentHash)
 	}
 
 	// Persist a fingerprint of the reconciled restrictions in the version
 	// message so that --changes-only can detect permission-only changes on the
 	// next run.
 	if reconcileActive {
-		finalVersionMessage = fmt.Sprintf("%s [r%s]", finalVersionMessage, restrictions.Fingerprint())
+		versionTokens += fmt.Sprintf(" [r%s]", restrictions.Fingerprint())
 	}
+
+	finalVersionMessage := buildVersionMessage(config.VersionMessage, versionTokens)
 
 	// Only fetch the old body and inline comments when we know the page will
 	// actually be updated. This avoids unnecessary API round-trips for no-op
@@ -664,6 +669,37 @@ func sha1Hash(input string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// maxVersionMessageLen bounds the page version message so that the
+// change-detection markers (the trailing [v...] and [r...] tokens) survive
+// Confluence's version-message length limit. Because the tokens are what
+// --changes-only relies on, buildVersionMessage keeps them intact and truncates
+// the user-supplied message instead.
+const maxVersionMessageLen = 255
+
+func buildVersionMessage(userMessage, tokens string) string {
+	message := userMessage + tokens
+	if len(message) <= maxVersionMessageLen || tokens == "" {
+		return message
+	}
+
+	budget := maxVersionMessageLen - len(tokens)
+	if budget < 0 {
+		budget = 0
+	}
+	// Back up to a UTF-8 rune boundary so the message is never split mid-rune.
+	for budget > 0 && budget < len(userMessage) && !utf8.RuneStart(userMessage[budget]) {
+		budget--
+	}
+	if budget < len(userMessage) {
+		log.Warn().Msg(
+			"version message truncated to preserve --changes-only markers; " +
+				"consider shortening --version-message",
+		)
+		userMessage = userMessage[:budget]
+	}
+	return userMessage + tokens
+}
+
 // reRestrictionHash matches the restriction fingerprint token embedded in a
 // page version message by a previous reconcile run.
 var reRestrictionHash = regexp.MustCompile(`\[r([a-f0-9]{64})]`)
@@ -713,24 +749,29 @@ func validateRestrictions(
 // by the declared restrictions exists in Confluence, failing fast on typos.
 // Each distinct principal is checked at most once.
 func validateRestrictionPrincipals(api *confluence.API, set *restriction.Set) error {
+	// Confluence user and group names are case-insensitive, so key the seen sets
+	// on the lower-cased name to avoid redundant existence checks when the same
+	// principal appears with different casing (e.g. view vs edit rules).
 	seenUsers := make(map[string]bool)
 	seenGroups := make(map[string]bool)
 
 	for _, rule := range set.Rules {
 		switch rule.Subject {
 		case restriction.SubjectUser:
-			if seenUsers[rule.Name] {
+			key := strings.ToLower(rule.Name)
+			if seenUsers[key] {
 				continue
 			}
-			seenUsers[rule.Name] = true
+			seenUsers[key] = true
 			if err := api.CheckUserExists(rule.Name); err != nil {
 				return err
 			}
 		case restriction.SubjectGroup:
-			if seenGroups[rule.Name] {
+			key := strings.ToLower(rule.Name)
+			if seenGroups[key] {
 				continue
 			}
-			seenGroups[rule.Name] = true
+			seenGroups[key] = true
 			if err := api.CheckGroupExists(rule.Name); err != nil {
 				return err
 			}

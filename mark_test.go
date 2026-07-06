@@ -1,6 +1,7 @@
 package mark
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/kovetskiy/mark/v16/confluence"
@@ -20,6 +21,25 @@ func TestTruncateSelection(t *testing.T) {
 	assert.Equal(t, "世界…", truncateSelection("世界 is the world", 2))
 }
 
+func TestBuildVersionMessage(t *testing.T) {
+	// Short message: tokens simply appended.
+	assert.Equal(t, "msg [v"+strings40()+"]", buildVersionMessage("msg", " [v"+strings40()+"]"))
+
+	// No tokens: returned unchanged even if long.
+	long := strings.Repeat("x", 400)
+	assert.Equal(t, long, buildVersionMessage(long, ""))
+
+	// Over the limit: the user message is truncated but the tokens survive
+	// intact and the result fits within the cap.
+	tokens := " [v" + strings40() + "] [r" + strings64() + "]"
+	result := buildVersionMessage(strings.Repeat("y", 400), tokens)
+	assert.True(t, strings.HasSuffix(result, tokens), "tokens must be preserved")
+	assert.LessOrEqual(t, len(result), maxVersionMessageLen)
+}
+
+func strings40() string { return strings.Repeat("a", 40) }
+func strings64() string { return strings.Repeat("b", 64) }
+
 func TestLevenshteinDistance(t *testing.T) {
 	tests := []struct {
 		s1, s2 string
@@ -29,9 +49,9 @@ func TestLevenshteinDistance(t *testing.T) {
 		{"abc", "", 3},
 		{"", "abc", 3},
 		{"abc", "abc", 0},
-		{"abc", "axc", 1},   // one substitution
-		{"abc", "ab", 1},    // one deletion
-		{"ab", "abc", 1},    // one insertion
+		{"abc", "axc", 1}, // one substitution
+		{"abc", "ab", 1},  // one deletion
+		{"ab", "abc", 1},  // one insertion
 		{"kitten", "sitting", 3},
 		// Multibyte: é is one rune, so distance from "héllo" to "hello" is 1.
 		{"héllo", "hello", 1},
@@ -206,7 +226,6 @@ func TestMergeComments_ApostropheSelection(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, `<p>Hello <ac:inline-comment-marker ac:ref="uuid-apos">it's</ac:inline-comment-marker> a test</p>`, result)
 }
-
 
 // TestMergeComments_NestedTags verifies that a marker whose stored content
 // contains nested inline tags (e.g. <strong>) is still recognised by
