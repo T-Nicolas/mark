@@ -958,59 +958,29 @@ func (api *API) RestrictPageUpdates(
 	return err
 }
 
-// ReconcilePageRestrictions replaces the page's local view and edit
+// ReconcilePageRestrictions replaces the page's read (view) and update (edit)
 // restrictions so that they match exactly the supplied users and groups.
 //
-// It uses the JSON-RPC setContentPermissions endpoint, whose semantics are a
-// full replacement of the permission set for the given type; passing empty
-// slices therefore removes the corresponding restriction entirely. Both the
-// View and Edit permission types are always written so that removing a rule
-// from the Markdown reliably clears it in Confluence.
+// It uses PUT on the REST content-restriction endpoint, whose semantics are a
+// full replacement of the restriction set: passing empty slices therefore
+// removes the corresponding restriction entirely, and both operations are
+// always written so that removing a rule from the Markdown reliably clears it
+// in Confluence.
 //
-// This is a Confluence Server / Data Center feature only; the JSON-RPC API is
-// not available on Confluence Cloud.
+// Unlike the legacy JSON-RPC setContentPermissions endpoint (still used by
+// --edit-lock), the REST endpoint works with personal access tokens, not just
+// HTTP basic auth. Users are identified by username, which is a Confluence
+// Server / Data Center concept (Cloud uses accountId).
 func (api *API) ReconcilePageRestrictions(
 	page *PageInfo,
 	viewUsers, viewGroups, editUsers, editGroups []string,
 ) error {
-	if api.IsCloud() {
-		return errors.New(
-			"page-level restriction reconciliation is only supported on " +
-				"Confluence Server / Data Center",
-		)
-	}
-
-	if err := api.setContentPermissions(page.ID, "View", viewUsers, viewGroups); err != nil {
-		return fmt.Errorf("unable to set view restrictions: %w", err)
-	}
-	if err := api.setContentPermissions(page.ID, "Edit", editUsers, editGroups); err != nil {
-		return fmt.Errorf("unable to set edit restrictions: %w", err)
-	}
-
-	return nil
-}
-
-func (api *API) setContentPermissions(
-	pageID string,
-	permissionType string,
-	users, groups []string,
-) error {
-	permissions := make([]map[string]any, 0, len(users)+len(groups))
-	for _, user := range users {
-		permissions = append(permissions, map[string]any{"userName": user})
-	}
-	for _, group := range groups {
-		permissions = append(permissions, map[string]any{"groupName": group})
-	}
-
 	var result any
-	request, err := api.json.Res(
-		"setContentPermissions", &result,
-	).Post([]any{
-		pageID,
-		permissionType,
-		permissions,
-	})
+	request, err := api.rest.
+		Res("content").
+		Id(page.ID).
+		Res("restriction", &result).
+		Put(buildRestrictionPayload(viewUsers, viewGroups, editUsers, editGroups))
 	if err != nil {
 		return err
 	}
@@ -1019,14 +989,43 @@ func (api *API) setContentPermissions(
 		return newErrorStatusNotOK(request)
 	}
 
-	if success, ok := result.(bool); !ok || !success {
-		return fmt.Errorf(
-			"'true' response expected, but '%v' encountered",
-			result,
-		)
+	return nil
+}
+
+// buildRestrictionPayload builds the body for PUT content/{id}/restriction. The
+// REST API names the operations "read" and "update" (Mark exposes them as view
+// and edit in the Markdown, matching the Confluence UI wording).
+func buildRestrictionPayload(viewUsers, viewGroups, editUsers, editGroups []string) []map[string]any {
+	return []map[string]any{
+		restrictionOperation("read", viewUsers, viewGroups),
+		restrictionOperation("update", editUsers, editGroups),
+	}
+}
+
+func restrictionOperation(operation string, users, groups []string) map[string]any {
+	userResults := make([]map[string]any, 0, len(users))
+	for _, user := range users {
+		userResults = append(userResults, map[string]any{
+			"type":     "known",
+			"username": user,
+		})
 	}
 
-	return nil
+	groupResults := make([]map[string]any, 0, len(groups))
+	for _, group := range groups {
+		groupResults = append(groupResults, map[string]any{
+			"type": "group",
+			"name": group,
+		})
+	}
+
+	return map[string]any{
+		"operation": operation,
+		"restrictions": map[string]any{
+			"user":  map[string]any{"results": userResults},
+			"group": map[string]any{"results": groupResults},
+		},
+	}
 }
 
 // CheckUserExists verifies that a Confluence user with the given username
